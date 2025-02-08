@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 import os
 import base64
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont  # Add ImageDraw here
 from io import BytesIO
 import torch
 from torchvision import transforms
@@ -13,7 +13,6 @@ import time
 
 app = Flask(__name__)
 
-# Folder to store uploaded images and predictions
 UPLOAD_FOLDER_FASTER_RCNN = 'uploads_faster_rcnn'
 UPLOAD_FOLDER_YOLOV8 = 'uploads_yolov8'
 PREDICTION_FOLDER = 'predictions'
@@ -21,7 +20,11 @@ os.makedirs(UPLOAD_FOLDER_FASTER_RCNN, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER_YOLOV8, exist_ok=True)
 os.makedirs(PREDICTION_FOLDER, exist_ok=True)
 
-# Load the Faster R-CNN model
+try:
+    font = ImageFont.truetype("arial.ttf", size=20)
+except IOError:
+    font = ImageFont.load_default()
+
 def load_faster_rcnn_model():
     model = fasterrcnn_resnet50_fpn(pretrained=False)
     num_classes = 11
@@ -35,10 +38,8 @@ def load_faster_rcnn_model():
 
 faster_rcnn_model = load_faster_rcnn_model()
 
-# Load the YOLOv8 model
 yolov8_model = YOLO("yoloV8/runs/detect/train/weights/best.pt")
 
-# Image preprocessing function for Faster R-CNN
 def preprocess_image(image_path):
     image = Image.open(image_path).convert("RGB")
     transform = transforms.Compose([
@@ -47,7 +48,6 @@ def preprocess_image(image_path):
     image_tensor = transform(image).unsqueeze(0)  # Add batch dimension
     return image_tensor
 
-# Save predictions to disk
 def save_predictions(predictions, annotated_image, model_name, file_id):
     # Save prediction data as JSON
     prediction_data_path = os.path.join(PREDICTION_FOLDER, f"{model_name}_predictions_{file_id}.json")
@@ -60,28 +60,21 @@ def save_predictions(predictions, annotated_image, model_name, file_id):
 
 @app.route('/test/fasterrcnn', methods=['POST'])
 def test_fasterrcnn():
-    # Check if an image file is included in the request
     if 'image' not in request.files:
         return jsonify({'error': 'No image part in the request'}), 400
     file = request.files['image']
-    # Check if a file was selected
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
-    # Save the uploaded file
     if file:
         filepath = os.path.join(UPLOAD_FOLDER_FASTER_RCNN, file.filename)
         file.save(filepath)
         try:
-            # Preprocess the image
             image_tensor = preprocess_image(filepath)
-            # Perform prediction
-            with torch.no_grad():  # Disable gradient computation
-                predictions = faster_rcnn_model(image_tensor)[0]  # Get predictions
-            # Extract relevant information
+            with torch.no_grad():
+                predictions = faster_rcnn_model(image_tensor)[0]
             boxes = predictions['boxes'].cpu().numpy().tolist()
             labels = predictions['labels'].cpu().numpy().tolist()
             scores = predictions['scores'].cpu().numpy().tolist()
-            # Filter predictions based on a confidence threshold
             confidence_threshold = 0.5
             filtered_predictions = [
                 {
@@ -92,40 +85,38 @@ def test_fasterrcnn():
                 for box, label, score in zip(boxes, labels, scores)
                 if score >= confidence_threshold
             ]
-            # Plot the annotated image
             from PIL import ImageDraw
             image = Image.open(filepath).convert("RGB")
             draw = ImageDraw.Draw(image)
             for pred in filtered_predictions:
                 bbox = pred['bbox']
-                draw.rectangle(bbox, outline="red", width=2)
-                draw.text((bbox[0], bbox[1]), f"{pred['class']} {pred['confidence']:.2f}", fill="red")
-            # Convert the annotated image to Base64
+                label_id = pred['class']
+                confidence = pred['confidence']
+                disease_name = {0: "crops", 1: "PowderyMildew", 2: "aphids", 3: "army-worm",
+                                4: "bacterialblight", 5: "blur images", 6: "curlvirus",
+                                7: "fussarium_wilt", 8: "healthy", 9: "targetspot"}[label_id]
+                label_text = f"(Faster R-CNN)({disease_name})({confidence:.2f})"
+                draw.rectangle(bbox, outline="white", width=2)
+                draw.text((bbox[0], bbox[1]), label_text, fill="white", font=font)
             buffered = BytesIO()  # Use BytesIO to create an in-memory buffer
             image.save(buffered, format="JPEG")
             img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
-            # Save predictions locally
             file_id = int(time.time())  # Generate a unique ID based on timestamp
             save_predictions(filtered_predictions, image, "fasterrcnn", file_id)
-            # Clean up the uploaded file
             os.remove(filepath)
-            # Return the predictions and the Base64-encoded image
             return jsonify({
                 'predictions': filtered_predictions,
                 'image': img_str  # Base64-encoded image
             }), 200
         except Exception as e:
-            # Handle any errors during prediction
-            os.remove(filepath)  # Clean up the uploaded file even if an error occurs
+            os.remove(filepath)
             return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
 
 @app.route('/test/yolov8', methods=['POST'])
 def upload_image():
-    # Check if an image file is included in the request
     if 'image' not in request.files:
         return jsonify({'error': 'No image part in the request'}), 400
     file = request.files['image']
-    # Check if a file was selected
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
     # Save the uploaded file
@@ -266,12 +257,33 @@ def compare_models():
                 used_indices.add(i)
                 best_predictions.append(best_pred)
 
+            # Annotate the image with the best predictions
+            image = Image.open(filepath).convert("RGB")
+            draw = ImageDraw.Draw(image)
+            for pred in best_predictions:
+                bbox = pred['bbox']
+                label_id = pred['class']
+                confidence = pred['confidence']
+                # Map the class ID to the disease name
+                disease_name = {0: "crops", 1: "PowderyMildew", 2: "aphids", 3: "army-worm",
+                                4: "bacterialblight", 5: "blur images", 6: "curlvirus",
+                                7: "fussarium_wilt", 8: "healthy", 9: "targetspot"}[label_id]
+                draw.rectangle(bbox, outline="white", width=2)
+                label_text = f"(Faster R-CNN)({disease_name})({confidence:.2f})"
+                draw.text((bbox[0], bbox[1]), label_text, fill="white",font=font)
+
+            # Convert the annotated image to Base64
+            buffered = BytesIO()
+            image.save(buffered, format="JPEG")
+            img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
             # Clean up the uploaded file
             os.remove(filepath)
 
-            # Return the best predictions
+            # Return the best predictions and the Base64-encoded image
             return jsonify({
-                'best_predictions': best_predictions
+                'best_predictions': best_predictions,
+                'image': img_str  # Base64-encoded image
             }), 200
 
         except Exception as e:
