@@ -1,0 +1,9 @@
+torch
+torchvision
+torchaudio
+pycocotools
+roboflow
+Flask==2.0.1
+Werkzeug==2.0.3
+ultralytics
+pillow
