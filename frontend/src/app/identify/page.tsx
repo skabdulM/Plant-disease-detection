@@ -3,17 +3,7 @@
 import React, { useState } from "react";
 import { Clover } from "lucide-react";
 import ImageUpload from "@/components/ImageUpload";
-
-const fasterRCNNClassMapping: Record<number, string> = {
-  0: "Crops",
-  1: "Powdery Mildew",
-  2: "Aphids",
-  3: "Army Worm",
-  4: "Bacterial Blight",
-  5: "Curl Virus",
-  6: "Healthy",
-  7: "Target Spot",
-};
+import parse from "html-react-parser";
 
 // Helper function to map the model names
 const getModelName = (model: string) => {
@@ -27,7 +17,13 @@ export default function Home() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [processedImage, setProcessedImage] = useState<string | null>(null);
   const [results, setResults] = useState<
-    { class: number; confidence: number; model?: string }[]
+    {
+      class: number;
+      confidence: number;
+      model?: string;
+      class_name: string;
+      suggestions: string;
+    }[]
   >([]);
   const [loading, setLoading] = useState(false);
 
@@ -62,6 +58,8 @@ export default function Home() {
         setResults(
           data.best_predictions.map((pred: any) => ({
             class: pred.class,
+            class_name: pred.class_name,
+            suggestions: pred.suggestions,
             confidence: pred.confidence,
             model: pred.model,
           }))
@@ -70,37 +68,26 @@ export default function Home() {
         setResults([
           {
             class: data.predictions[0].class,
+            class_name: data.predictions[0].class_name,
+            suggestions: data.predictions[0].suggestions,
             confidence: data.predictions[0].confidence,
           },
         ]);
       }
     } catch (error) {
       console.error("Error:", error);
+      alert("An error occurred while processing the image.");
       setResults([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // Helper function to map the class based on model
-  const getClassName = (res: { class: number; model?: string }) => {
-    // For non-comparison models, use the selectedModel
-    if (selectedModel === "fasterrcnn") {
-      return fasterRCNNClassMapping[res.class] || res.class;
-    } else if (selectedModel === "yolov8") {
-      // For YOLOv8, results are shifted so add one to the class index
-      return fasterRCNNClassMapping[res.class + 1] || res.class + 1;
-    } else if (selectedModel === "comparison") {
-      // In the comparison model, check the model property from result
-      if (res.model === "fasterrcnn") {
-        return fasterRCNNClassMapping[res.class] || res.class;
-      } else if (res.model === "yolov8") {
-        return fasterRCNNClassMapping[res.class + 1] || res.class + 1;
-      }
-      return res.class;
-    }
-    return res.class;
-  };
+  function cleanHtmlFence(s: string) {
+    return s
+      .replace(/^```html\s*/, "") // remove opening ```html
+      .replace(/\s*```$/, ""); // remove closing ```
+  }
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center p-24">
@@ -170,12 +157,18 @@ export default function Home() {
                   </p>
                 )}
                 <p className="text-lg">
-                  Class: <strong>{getClassName(res)}</strong>
+                  Class: <strong>{res.class_name}</strong>
                 </p>
                 <p className="text-lg">
                   Confidence:{" "}
                   <strong>{(res.confidence * 100).toFixed(2)}%</strong>
                 </p>
+                <p className="text-lg">
+                  <strong>Suggestions: </strong>{" "}
+                </p>
+                <div className="suggestions text-base leading-snug">
+                  {parse(cleanHtmlFence(res.suggestions))}
+                </div>
               </div>
             ))}
           </div>

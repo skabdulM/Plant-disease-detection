@@ -11,10 +11,15 @@ from ultralytics import YOLO
 import json
 import time
 from flask_cors import CORS
+from google.genai import types
+
+# Configure Gemini API (replace with your API key)
+from google import genai
 
 app = Flask(__name__)
 CORS(app)
 
+client = genai.Client(api_key="AIzaSyCAbdwpZqjJLSMqTWRvmO5Uno8aDo_wLYA")
 yolov8_path = "yolov8/runs/detect/train5/weights/best.pt"
 fastercnn_path = "fasterRCNNmodal/fasterrcnn_resnet50_epoch_47.pth"
 UPLOAD_FOLDER_FASTER_RCNN = "uploads_faster_rcnn"
@@ -57,6 +62,37 @@ def preprocess_image(image_path):
     )
     image_tensor = transform(image).unsqueeze(0)  # Add batch dimension
     return image_tensor
+
+
+def get_gemini_suggestions(pred):
+    if pred["class_name"].lower() == "healthy":
+        prompt = f"""
+        Provide general care tips for healthy cotton plants as an HTML unordered list (<ul> and <li> tags).
+        Include advice on watering, fertilization, sunlight, and common maintenance practices.
+        Aim for a response within 200 words.
+        Confidence: {pred['confidence']:.2f}
+        """
+    else:
+        prompt = f"""
+        Provide treatment and prevention methods for **{pred["class_name"]}** in cotton plant.
+        Include both organic and chemical solutions.
+        Format as bullet points. It should be in html embedded format.
+        Format the output as an HTML unordered list (<ul> and <li> tags).
+        Format the output within 300-400 words.
+        Confidence: {pred['confidence']:.2f}
+    """
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+        )
+
+        return {
+            "suggestions": response.text,
+        }
+
+    except Exception as e:
+        return {"error": f"Couldn't generate the response: {str(e)}"}
 
 
 def save_predictions(predictions, annotated_image, model_name, file_id):
@@ -116,19 +152,22 @@ def test_fasterrcnn():
                     7: "targetspot",
                 }[label_id]
                 label_text = f"(Faster R-CNN)({disease_name})({confidence:.2f})"
+                pred["class_name"] = disease_name
+                pred["suggestions"] = get_gemini_suggestions(pred)["suggestions"]
                 draw.rectangle(bbox, outline="white", width=2)
                 draw.text((bbox[0], bbox[1]), label_text, fill="white", font=font)
-            buffered = BytesIO()  # Use BytesIO to create an in-memory buffer
+            buffered = BytesIO()
             image.save(buffered, format="JPEG")
             img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-            file_id = int(time.time())  # Generate a unique ID based on timestamp
+            file_id = int(time.time())
             save_predictions(filtered_predictions, image, "fasterrcnn", file_id)
+            # get_gemini_suggestions(filtered_predictions)
             os.remove(filepath)
             return (
                 jsonify(
                     {
                         "predictions": filtered_predictions,
-                        "image": img_str,  # Base64-encoded image
+                        "image": img_str,
                     }
                 ),
                 200,
@@ -162,15 +201,18 @@ def upload_image():
             predictions = []
             for result in results:
                 for box in result.boxes:
-                    predictions.append(
-                        {
-                            "class": int(box.cls),  # Class index
-                            "confidence": float(box.conf),  # Confidence score
-                            "bbox": box.xyxy.tolist()[
-                                0
-                            ],  # Bounding box coordinates [x1, y1, x2, y2]
-                        }
-                    )
+                    class_id = int(box.cls)
+                    class_name = yolov8_model.names[class_id]
+                    pred = {
+                        "class": class_id,  # Class index
+                        "class_name": class_name,
+                        "confidence": float(box.conf),  # Confidence score
+                        "bbox": box.xyxy.tolist()[
+                            0
+                        ],  # Bounding box coordinates [x1, y1, x2, y2]
+                    }
+                    pred["suggestions"] = get_gemini_suggestions(pred)["suggestions"]
+                    predictions.append(pred)
             # Get the plotted image (annotated with detections)
             annotated_image = results[0].plot()  # Returns an image with bounding boxes
             # Convert the annotated image to Base64
@@ -182,9 +224,9 @@ def upload_image():
             save_predictions(
                 predictions, Image.fromarray(annotated_image), "yolov8", file_id
             )
-            # Clean up the uploaded file
+
             os.remove(filepath)
-            # Return the predictions and the Base64-encoded image
+
             return (
                 jsonify(
                     {
@@ -197,6 +239,7 @@ def upload_image():
         except Exception as e:
             # Handle any errors during prediction
             os.remove(filepath)  # Clean up the uploaded file even if an error occurs
+            print(e)
             return jsonify({"error": f"Prediction failed: {str(e)}"}), 500
 
 
@@ -258,16 +301,18 @@ def compare_models():
             yolov8_filtered = []
             for result in results:
                 for box in result.boxes:
-                    yolov8_filtered.append(
-                        {
-                            "model": "yolov8",
-                            "class": int(box.cls),  # Class index
-                            "confidence": float(box.conf),  # Confidence score
-                            "bbox": box.xyxy.tolist()[
-                                0
-                            ],  # Bounding box coordinates [x1, y1, x2, y2]
-                        }
-                    )
+                    class_id = int(box.cls)
+                    class_name = yolov8_model.names[class_id]
+                    pred = {
+                        "model": "yolov8",
+                        "class": class_id,  # Class index
+                        "confidence": float(box.conf),  # Confidence score
+                        "class_name": class_name,
+                        "bbox": box.xyxy.tolist()[
+                            0
+                        ],  # Bounding box coordinates [x1, y1, x2, y2]
+                    }
+                    yolov8_filtered.append(pred)
 
             # Combine predictions from both models
             all_predictions = faster_rcnn_filtered + yolov8_filtered
@@ -314,44 +359,49 @@ def compare_models():
             draw = ImageDraw.Draw(image)
             for pred in best_predictions:
                 bbox = pred["bbox"]
-                label_id = pred["class"]
                 confidence = pred["confidence"]
-                disease_name = {
-                    0: "crops",
-                    1: "PowderyMildew",
-                    2: "aphids",
-                    3: "army-worm",
-                    4: "bacterialblight",
-                    5: "curlvirus",
-                    6: "healthy",
-                    7: "targetspot",
-                }[label_id]
+
+                # Get disease name based on model type
+                if pred["model"] == "fasterrcnn":
+                    disease_name = {
+                        0: "crops",
+                        1: "PowderyMildew",
+                        2: "aphids",
+                        3: "army-worm",
+                        4: "bacterialblight",
+                        5: "curlvirus",
+                        6: "healthy",
+                        7: "targetspot",
+                    }[pred["class"]]
+                    pred["class_name"] = disease_name
+                else:  # YOLOv8
+                    disease_name = pred["class_name"]
+
+                # Create label and draw
+                label_text = f"({pred['model']})({disease_name})({confidence:.2f})"
                 draw.rectangle(bbox, outline="white", width=2)
-                label_text = f"(Faster R-CNN)({disease_name})({confidence:.2f})"
                 draw.text((bbox[0], bbox[1]), label_text, fill="white", font=font)
 
-            # Convert the annotated image to Base64
+                pred["suggestions"] = get_gemini_suggestions(pred)["suggestions"]
+
             buffered = BytesIO()
             image.save(buffered, format="JPEG")
             img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-            # Clean up the uploaded file
             os.remove(filepath)
 
-            # Return the best predictions and the Base64-encoded image
             return (
                 jsonify(
                     {
                         "best_predictions": best_predictions,
-                        "image": img_str,  # Base64-encoded image
+                        "image": img_str,
                     }
                 ),
                 200,
             )
 
         except Exception as e:
-            # Handle any errors during prediction
-            os.remove(filepath)  # Clean up the uploaded file even if an error occurs
+            os.remove(filepath)
             return jsonify({"error": f"Comparison failed: {str(e)}"}), 500
 
 
