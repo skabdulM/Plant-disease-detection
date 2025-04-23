@@ -84,9 +84,7 @@ export default function Home() {
   };
 
   function cleanHtmlFence(s: string) {
-    return s
-      .replace(/^```html\s*/, "") // remove opening ```html
-      .replace(/\s*```$/, ""); // remove closing ```
+    return s.replace(/^```html\s*/, "").replace(/\s*```$/, "");
   }
 
   return (
