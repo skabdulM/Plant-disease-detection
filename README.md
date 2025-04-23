@@ -27,7 +27,6 @@ A web application that uses machine learning to detect plant diseases from image
 - Basic understanding of command line operations
 
 ## Setup Instructions
-
 ### Backend Setup - Create and Activate Virtual Environment
 
 1. **Clone the repository in your System:**
@@ -58,14 +57,19 @@ A web application that uses machine learning to detect plant diseases from image
      ```sh
      source .venv/bin/activate
      ```
+   
+5. **Install the required python requirements:**
 
-5. **Start Server:**
+     ```sh
+     pip install -r ./requirements.txt
+     ```
+
+6. **Start Server:**
 
    ```sh
    cd ../
    python app.py
    ```
-
 ### Frontend Setup
 
 1. **Install the dependencies:**
@@ -80,14 +84,13 @@ A web application that uses machine learning to detect plant diseases from image
    ```sh
    npm run dev
    ```
-
+   
 ## Project Structure
-
 ```
 Plant-disease-detection/
 ├── .venv/                     # Virtual environment
-├── fasterRCNNmodal/            # Faster R-CNN Model
-├── f\Frontend/                  # Frontend source code
+├── fasterRCNNmodal/           # Faster R-CNN Model
+├── f\Frontend/                # Frontend source code
 │   ├── src/
 │   └── package.json
 ├── test_images/               # Sample images for testing
